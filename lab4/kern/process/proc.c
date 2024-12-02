@@ -102,12 +102,22 @@ alloc_proc(void) {
      *       uint32_t flags;                             // Process flag
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
-
+	proc->state = PROC_UNINIT;
+	proc->pid = -1;
+	proc->runs = 0;
+	proc->kstack = 0;
+	proc->need_resched = 0;
+	proc->parent = NULL;
+	proc->mm = NULL;
+	memset(&(proc->context), 0, sizeof(struct context));
+	proc->tf = NULL;
+	proc->cr3 = boot_cr3;
+	proc->flags = 0;
+	memset(proc->name, 0, PROC_NAME_LEN + 1);
 
     }
     return proc;
 }
-
 // set_proc_name - set the name of proc
 char *
 set_proc_name(struct proc_struct *proc, const char *name) {
@@ -172,6 +182,7 @@ proc_run(struct proc_struct *proc) {
         *   lcr3():                   Modify the value of CR3 register
         *   switch_to():              Context switching between two processes
         */
+
        
     }
 }
@@ -260,10 +271,10 @@ copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
     proc->context.sp = (uintptr_t)(proc->tf);
 }
 
-/* do_fork -     parent process for a new child process
- * @clone_flags: used to guide how to clone the child process
- * @stack:       the parent's user stack pointer. if stack==0, It means to fork a kernel thread.
- * @tf:          the trapframe info, which will be copied to child process's proc->tf
+/* do_fork -     parent process for a new child process 新子进程的父进程
+ * @clone_flags: used to guide how to clone the child process 用于指导如何克隆子进程
+ * @stack:       the parent's user stack pointer. if stack==0, It means to fork a kernel thread. 父进程的用户栈指针。如果 stack==0，意味着要创建一个内核线程。
+ * @tf:          the trapframe info, which will be copied to child process's proc->tf 中断帧信息，将被复制到子进程的 proc->tf
  */
 int
 do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
@@ -273,8 +284,19 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
         goto fork_out;
     }
     ret = -E_NO_MEM;
-    //LAB4:EXERCISE2 YOUR CODE
+    //LAB4:EXERCISE2 2211287 卢星宇
     /*
+	 * // 1. 调用 alloc_proc 分配一个 proc_struct 结构体
+    // 2. 调用 setup_kstack 为子进程分配内核栈
+    // 3. 调用 copy_mm 根据 clone_flags 复制或共享 mm（内存管理）
+    //     如果 clone_flags & CLONE_VM，则“共享”；否则“复制”
+    // 4. 调用 copy_thread 设置子进程的内核栈顶的 trapframe 以及
+    //     设置进程的内核入口点和栈
+    // 5. 将 proc_struct 插入到 hash_list 和 proc_list 中
+    // 6. 调用 wakeup_proc 使新创建的子进程变为可运行状态（RUNNABLE）
+    // 7. 使用子进程的 pid 设置返回值 ret
+
+
      * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
      * MACROs or Functions:
      *   alloc_proc:   create a proc struct and init fields (lab4:exercise1)
@@ -297,9 +319,68 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    4. call copy_thread to setup tf & context in proc_struct
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
-    //    7. set ret vaule using child proc's pid
+   //    7. set ret vaule using child proc's pid
+    if ((proc = alloc_proc()) == NULL) {
 
+        goto bad_fork_cleanup_kstack;
+     }
+
+     proc = alloc_proc();
+
+    proc->parent = current; // 设置父进程为当前进程
+	
+
+     if (setup_kstack(proc) != 0) {
+     goto bad_fork_cleanup_proc;
+ }//内核栈分配失败，跳转到bad_fork_cleanup_proc释放proc并返回。
+	
+	if (copy_mm(clone_flags, proc) != 0) {
+		goto bad_fork_cleanup_kstack;
+	}//根据clone_flags，复制或共享父进程的内存管理结构。如果clone_flags & CLONE_VM为真，表示共享地址空间.否则为独立复制地址空间。
+
+	copy_thread(proc,stack,tf);//复制父进程的寄存器状态到新进程，并设置新进程的上下文.
+								
+	proc->pid = get_pid();//分配一个唯一的PID给新进程。
+	setup_kstack(proc);
+	hash_proc(proc);//将新进程插入进程哈希列表。
+					
+	list_add(&proc_list,&(proc->list_link));
+	nr_process++;
+	//将新进程插入到全局进程列表中，并增加进程计数。
+	
+	wakeup_proc(proc);//将新进程状态设置为PROC_RUNNABLE，表示可被调度执行。
+					  
+
+	ret = proc->pid;//将子进程的PID作为返回值，表示成功。							
+/*
+ 	  // 1. 分配一个新的进程结构体
+    proc = alloc_proc();
+    if (!proc) {
+        goto bad_fork_cleanup_kstack;
+    }
+	proc->pid=get_pid();
+    // 2. 为子进程分配内核栈
+   setup_kstack(proc);
+      if (copy_mm(clone_flags, proc) != 0) {  // 调用copy_mm函数复制父进程的内存管理信息
+        goto bad_fork_cleanup_proc;
+    }
+// 4. 设置子进程的trapframe和上下文
+    copy_thread(proc, stack, tf);
     
+    
+
+    // 5. 将新进程的proc_struct插入到哈希表和进程列表中
+    hash_proc(proc);
+    list_add(&proc_list, &(proc->list_link));
+
+    // 6. 唤醒新进程，使其变为可运行状态
+    wakeup_proc(proc);
+
+    // 7. 使用子进程的pid设置返回值
+    ret = proc->pid;	   
+
+
+*/
 
 fork_out:
     return ret;
