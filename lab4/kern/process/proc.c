@@ -489,4 +489,3 @@ cpu_idle(void) {
         }
     }
 }
-
