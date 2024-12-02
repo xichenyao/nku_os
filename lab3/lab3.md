@@ -486,13 +486,18 @@ get_pte()函数主要执行的是根据给定的虚拟地址la和是否创建新
 请在实验报告中简要说明你的设计实现过程。请回答如下问题：
 
 
-|这是图片
+
+
+![Alt text](p1.png)
 
 这段代码是在处理缺页异常时，找到虚拟地址对应的vma且存在一个页表项的情况。
 首先将一个磁盘页换入到内存中，调用swap_in函数，根据页表基地址和虚拟地址从磁盘对应位置读取，写入内存。
 建立页表项的映射关系，page_insert函数将虚拟地址与内存中的物理页进行映射，更新页表项，并刷新TLB。
 最后调用swap_map_swappable，设置页面可交换。
 
+![Alt text](p2.png)
+
+![Alt text](p3.png)
 
 ###请描述页目录项（Page Directory Entry）和页表项（Page Table Entry）中组成部分对ucore实现页替换算法的潜在用处。
 
@@ -759,3 +764,6 @@ _lru_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick)
 ```
 将 victim_entry 设置为链表的最后一个节点，即最久未被访问的页面。
 使用 le2page 宏获取该链表节点对应的页面结构 Page。将找到的页面指针赋值给输出参数 ptr_page。将 victim_entry 从链表中移除，表示页面被换出。实现了 LRU 页面换出算法的核心逻辑，通过检查 visited 标志来找到最久未被访问的页面，并在找到合适的页面后将其从链表中移除。
+
+![Alt text](p4.png)
+![Alt text](p5.png)
