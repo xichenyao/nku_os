@@ -264,6 +264,6 @@ proc_run用于将指定的进程切换到CPU上运行。它的大致执行步骤
 
 
 
-![Alt text](p1.png)
+![Alt text](1.png)
 
-![Alt text](p2.png)
+![Alt text](2.png)
