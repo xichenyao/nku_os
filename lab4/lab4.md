@@ -260,3 +260,10 @@ proc_run用于将指定的进程切换到CPU上运行。它的大致执行步骤
 
 
 说明语句local_intr_save(intr_flag);....local_intr_restore(intr_flag);是如何实现开关中断的？
+
+
+
+
+![Alt text](p1.png)
+
+![Alt text](p2.png)
