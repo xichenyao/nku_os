@@ -173,7 +173,7 @@ get_pid(void) {
 void
 proc_run(struct proc_struct *proc) {
     if (proc != current) {
-        // LAB4:EXERCISE3 YOUR CODE
+        // LAB4:EXERCISE3 2213254 聂嘉欣
         /*
         * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
         * MACROs or Functions:
@@ -183,7 +183,23 @@ proc_run(struct proc_struct *proc) {
         *   switch_to():              Context switching between two processes
         */
 
-       
+       bool intr_flag;
+        struct proc_struct *prev = current; 
+        //用于标识当前进程的进程控制块
+        struct proc_struct *next = proc;
+        //用于标识要切换的进程的进程控制块
+        local_intr_save(intr_flag);
+        //确保在调度函数执行期间，不会被中断打断
+        {
+            current = proc;
+            //将当前运行的进程设置为要切换过去的进程
+            lcr3(next->cr3);
+            //将页表换成新进程的页表
+            switch_to(&(prev->context), &(next->context));
+            //使用switch_to切换到新进程
+        }
+        local_intr_restore(intr_flag);
+        //恢复中断
     }
 }
 
