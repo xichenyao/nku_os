@@ -26,8 +26,9 @@
 本实验依赖实验2/3/4。请把你做的实验2/3/4的代码填入本实验中代码中有“LAB2”/“LAB3”/“LAB4”的注释相应部分。注意：为了能够正确执行lab5的测试应用程序，可能需对已完成的实验2/3/4的代码进行进一步改进。
 
 修改代码如下图：
-
-
+![Alt text](1.png)
+![Alt text](2.png)
+![Alt text](3.png)
 ## 练习1: 加载应用程序并执行（需要编码）
 
 do_execv函数调用load_icode（位于kern/process/proc.c中）来加载并解析一个处于内存中的ELF执行文件格式的应用程序。你需要补充load_icode的第6步，建立相应的用户内存空间来放置应用程序的代码段、数据段等，且要设置好proc_struct结构中的成员变量trapframe中的内容，确保在执行此进程后，能够从应用程序设定的起始执行地址开始执行。需设置正确的trapframe内容。
@@ -98,7 +99,19 @@ lcr3(PADDR(mm->pgdir));
 
 通过修改 epc，进程的控制流跳转到程序的入口地址（即 ELF 文件中 e_entry 字段指定的地址）。此时，用户程序开始执行第一条指令。
 
-
+![Alt text](4.png)
+![Alt text](5.png)
+![Alt text](6.png)
+![Alt text](7.png)
+![Alt text](8.png)
+![Alt text](9.png)
+![Alt text](10.png)
+![Alt text](11.png)
+![Alt text](12.png)
+![Alt text](13.png)
+![Alt text](14.png)
+![Alt text](15.png)
+![Alt text](16.png)
 ## 练习2: 父进程复制自己的内存空间给子进程（需要编码）
 
 创建子进程的函数do_fork在执行中将拷贝当前进程（即父进程）的用户内存地址空间中的合法内容到新进程中（子进程），完成内存资源的复制。具体是通过copy_range函数（位于kern/mm/pmm.c中）实现的，请补充copy_range的实现，确保能够正确执行。
@@ -153,7 +166,7 @@ Copy-on-Write (COW) 是一种延迟复制技术，主要用于优化内存资源
 请分析fork/exec/wait/exit的执行流程。重点关注哪些操作是在用户态完成，哪些是在内核态完成？内核态与用户态程序是如何交错执行的？内核态执行结果是如何返回给用户程序的？
 请给出ucore中一个用户态进程的执行状态生命周期图（包执行状态，执行状态之间的变换关系，以及产生变换的事件或函数调用）。（字符方式画即可）
 执行：make grade。如果所显示的应用程序检测都输出ok，则基本正确。（使用的是qemu-1.0.1）
-
+![Alt text](17.png)
 ## 扩展练习 Challenge
 
 实现 Copy on Write （COW）机制
