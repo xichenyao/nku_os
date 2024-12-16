@@ -167,3 +167,105 @@ Copy-on-Write (COW) 是一种延迟复制技术，主要用于优化内存资源
 这是一个big challenge.
 
 说明该用户程序是何时被预先加载到内存中的？与我们常用操作系统的加载有何区别，原因是什么？
+
+在实现 COW 的系统中，用户程序的内存页面不需要在一开始就全部加载到内存中。
+当父进程创建子进程时：
+用户地址空间中的页面不会被直接复制，而是通过将页表项标记为只读，允许父子进程共享相同的物理内存页面。
+页面的实际复制发生在首次写入操作时，触发缺页异常，由内核完成页面的分配和数据复制。
+
+```c
+int do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
+    int ret = -E_INVAL;
+    struct vma_struct *vma = find_vma(mm, addr);
+    pgfault_num++;
+
+    if (vma == NULL || vma->vm_start > addr) {
+        cprintf("not valid addr %x, and cannot find it in vma\n", addr);
+        goto failed;
+    }
+
+    uint32_t perm = PTE_U;
+    if (vma->vm_flags & VM_WRITE) {
+        perm |= PTE_W; // 标记页面可写
+    }
+    addr = ROUNDDOWN(addr, PGSIZE);
+
+    ret = -E_NO_MEM;
+    pte_t *ptep = NULL;
+
+    if ((ptep = get_pte(mm->pgdir, addr, 1)) == NULL) {
+        cprintf("get_pte in do_pgfault failed\n");
+        goto failed;
+    }
+
+    if (*ptep == 0) {
+        // 页表项不存在，分配页面并映射
+        if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
+            cprintf("pgdir_alloc_page in do_pgfault failed\n");
+            goto failed;
+        }
+    } else if (!(*ptep & PTE_W)) {
+        // 页表项存在但不可写，检查是否需要 COW
+        struct Page *page = pte2page(*ptep);
+
+        // 如果页面是共享的（引用计数 > 1），执行 COW
+        if (page_ref_count(page) > 1) {
+            struct Page *new_page = alloc_page();
+            if (new_page == NULL) {
+                cprintf("alloc_page in do_pgfault failed\n");
+                goto failed;
+            }
+
+            // 复制原页面内容到新页面
+            void *src_kvaddr = page2kva(page);
+            void *dst_kvaddr = page2kva(new_page);
+            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+
+            // 更新页表，映射新页面
+            if (page_insert(mm->pgdir, new_page, addr, perm) != 0) {
+                cprintf("page_insert in do_pgfault failed\n");
+                goto failed;
+            }
+
+            // 减少原页面的引用计数
+            page_ref_dec(page);
+        } else {
+            // 页面是独占的，直接设置写权限
+            *ptep |= PTE_W;
+        }
+    } else if (swap_init_ok) {
+        // 页面交换逻辑
+        struct Page *page = NULL;
+        if (swap_in(mm, addr, &page) != 0) {
+            cprintf("swap_in in do_pgfault failed\n");
+            goto failed;
+        }
+        if (page_insert(mm->pgdir, page, addr, perm) != 0) {
+            cprintf("page_insert in do_pgfault failed\n");
+            goto failed;
+        }
+        swap_map_swappable(mm, addr, page, 1);
+        page->pra_vaddr = addr;
+    } else {
+        cprintf("no swap_init_ok but ptep is %x, failed\n", *ptep);
+        goto failed;
+    }
+
+    ret = 0;
+failed:
+    return ret;
+}
+
+```
+判断共享页面
+
+使用 page_ref_count(page) 检查页面的引用计数，判断是否是共享页面。
+如果共享页面被写入，执行 COW 操作。
+COW 操作
+
+分配新页面 alloc_page。
+复制原页面内容到新页面 memcpy。
+更新页表映射到新页面，并设置写权限。
+状态变化
+
+共享状态 → 独占状态：减少原页面的引用计数，为当前进程分配新页面。
