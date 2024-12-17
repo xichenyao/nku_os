@@ -338,6 +338,13 @@ page->pra_vaddr = addr：记录页面的虚拟地址。如果所有操作成功�
 
 权限控制： 根据VMA的标志来控制访问权限（只读或读写）。
 
+do_fork（），用于模拟操作系统中创建新进程的过程。根据输入的 clone_flags，该函数会决定是否共享或复制父进程的内存映射、创建新的内核栈、设置新进程的相关数据结构，并最终使新进程变为可调度状态。
+nr_process 是当前系统中进程的数量，MAX_PROCESS 是系统允许的最大进程数。如果进程数已达上限，无法创建新进程，直接跳转到 fork_out 返回失败。该行设置了一个返回值 ret，初始为 -E_NO_MEM（表示内存不足的错误码）。如果一切顺利，ret 最终将被设置为新进程的 PID（进程ID）。alloc_proc() 是分配并初始化一个新的 proc_struct（进程控制块）的函数。如果分配失败（返回 NULL），则跳转到清理部分。新进程的父进程是当前进程 current。assert(current->wait_state == 0) 确保父进程处于正常的运行状态，未处于等待状态。setup_kstack(proc) 为新进程分配一个内核栈。如果分配失败，跳转到清理部分。copy_mm(clone_flags, proc) 根据 clone_flags 来决定是复制父进程的内存空间，还是共享内存空间。如果复制失败，跳转到清理部分。copy_thread(proc, stack, tf) 设置新进程的线程上下文（包括 Trapframe 和堆栈）。这会确保新进程能够在内核模式下正确执行。这部分通过 local_intr_save(intr_flag) 保存当前的中断状态，然后在临界区内进行进程的 PID 分配、进程哈希表插入和进程链接设置。
+get_pid()：为新进程分配一个唯一的 PID。
+hash_proc(proc)：将新进程插入到进程的哈希表中，方便后续管理。
+set_links(proc)：设置进程的相关链接，通常是将进程添加到进程链表或树结构中。wakeup_proc(proc) 将新进程的状态设置为 PROC_RUNNABLE，表示新进程已经准备好调度执行。
+如果一切顺利，ret 被设置为新进程的 PID，作为函数的返回值。
+
 ## 练习3: 阅读分析源代码，理解进程执行 fork/exec/wait/exit 的实现，以及系统调用的实现（不需要编码）
 
 请在实验报告中简要说明你对 fork/exec/wait/exit函数的分析。并回答如下问题：
