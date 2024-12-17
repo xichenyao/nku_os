@@ -41,63 +41,219 @@ do_execv函数调用load_icode（位于kern/process/proc.c中）来加载并解�
      tf->epc = elf->e_entry;
      tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
 ```
+
 tf->gpr.sp = USTACKTOP;
+
 作用：设置 sp（栈指针）为 USTACKTOP，这是用户栈的顶端。
-tf 是一个指向 trapframe 结构体的指针，通常用于保存进程的上下文（例如寄存器的值），这是操作系统进行上下文切换时的重要数据结构。
-gpr 是 trapframe 结构体中的通用寄存器集合，sp 是其中的栈指针（Stack Pointer），用于指向当前栈的顶部。
-USTACKTOP 是一个宏或常量，代表用户栈的栈顶地址。在某些操作系统中，用户空间和内核空间会共享地址空间，因此栈顶通常被设定为用户栈的起始地址（即栈的最大有效内存地址）。
+
+tf 是一个指向 trapframe 结构体的指针，gpr 是 trapframe 结构体中的通用寄存器集合，sp 是其中的栈指针（Stack Pointer），用于指向当前栈的顶部。USTACKTOP 是一个宏，定义了用户堆栈的起始地址。
+
 tf->epc = elf->e_entry;
-作用：将程序计数器 epc 设置为可执行文件 ELF 文件的入口点 e_entry。
-epc是存储当前执行指令地址的寄存器。在 RISC-V 中，epc 寄存器存储程序计数器的值。
-elf->e_entry 是从 ELF 文件头中获取的程序的入口点地址（即程序的起始执行地址）。ELF是可执行文件的标准格式，它包含了程序的各个部分（例如代码段、数据段等）。e_entry 是该文件中程序的起始地址。
+
+作用：将程序计数器 epc 设置为可执行文件 ELF 文件的入口点 e_entry。当从内核返回到用户空间时，程序将从这里开始执行。
+
+epc是存储当前执行指令地址的寄存器。在 RISC-V 中，epc 寄存器存储程序计数器的值。elf->e_entry 是从 ELF 文件头中获取的程序的入口点地址（即程序的起始执行地址）。ELF是可执行文件的标准格式，它包含了程序的各个部分（例如代码段、数据段等）。e_entry 是该文件中程序的起始地址。
+
 tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
+
 作用：设置 status 寄存器，确保进程从用户模式启动，且禁用中断。
-sstatus 是当前状态寄存器，用来存储 CPU 的状态信息，如中断启用、当前特权级别等。SSTATUS_SPP 和 SSTATUS_SPIE 是其中的标志位，控制着特权级和中断状态。
-SSTATUS_SPP：表示当前操作模式的标志位（即 SPP，Supervisor Previous Privilege）。当 SSTATUS_SPP 为 1 时，表示上一个操作模式是 Supervisor（内核模式），为 0 时表示是 User（用户模式）。
-SSTATUS_SPIE：表示中断使能的标志位。SPIE 表示 Supervisor 模式下的中断启用位。通常，SPIE 为 1 表示中断启用，为 0 表示中断禁用。
-sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE) 是对 sstatus 的位操作，清除 SSTATUS_SPP 和 SSTATUS_SPIE，即：
-设置 SSTATUS_SPP 为 0，表示程序将从用户模式开始执行。
-设置 SSTATUS_SPIE 为 0，表示禁用中断（即进入无中断模式，直到中断被显式地重新启用）。
-确保当前进程从用户模式开始，并且禁止中断。这样可以确保进程启动时处于干净的状态，避免因中断干扰而影响进程执行。
+
+sstatus 是当前状态寄存器，用来存储 CPU 的状态信息。SSTATUS_SPP 和 SSTATUS_SPIE 是其中的标志位，控制着特权级和中断状态。
+
+SSTATUS_SPP：表示当前操作模式的标志位。当 SSTATUS_SPP 为 1 时，表示上一个操作模式是 Supervisor（内核模式），为 0 时表示是 User（用户模式）。
+
+SSTATUS_SPIE：表示中断使能的标志位。SPIE 表示 Supervisor 模式下的中断启用位。SPIE 为 1 表示中断启用，为 0 表示中断禁用。
+
+sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE) 是对 sstatus 的位操作，清除 SSTATUS_SPP 和 SSTATUS_SPIE，即：设置 SSTATUS_SPP 为 0，表示程序将从用户模式开始执行。
+设置 SSTATUS_SPIE 为 0，表示禁用中断（即进入无中断模式，直到中断被显式地重新启用）。确保当前进程从用户模式开始，并且禁止中断。这样可以确保进程启动时处于干净的状态，避免因中断干扰而影响进程执行。
 
 
-load_icode()函数解析：
-加载 ELF 格式二进制程序（即用户应用程序）的过程，功能是将二进制文件加载到当前进程的虚拟地址空间，并为程序提供必要的资源，包括堆栈、代码段、数据段和 BSS 段等。它是进程创建或用户程序执行的一个重要部分。
-current->mm 表示当前进程的内存管理结构体（mm_struct），用于管理该进程的虚拟地址空间。如果已经有映射（即该进程已经有内存空间被分配），则无法加载新程序，因此报错并终止。
-创建一个新的内存管理结构体 mm，用于管理该进程的虚拟内存。若创建失败，则跳转至错误处理部分。
-设置新进程的页面目录（PDT），即为该进程建立一个虚拟地址空间映射。setup_pgdir 负责分配和初始化页表，并设置页目录。若失败，进行清理操作。
-通过 binary 获取 ELF 文件头（elfhdr），然后解析程序头表（proghdr）。检查 ELF 文件是否有效（即 e_magic 字段是否为有效的 ELF 魔术数）。
-遍历程序头表，处理每个加载类型为 ELF_PT_LOAD 的段（这些段是可加载到内存中的部分，如代码段和数据段）。如果程序头类型不是加载类型，跳过。
-为每个加载的程序段映射内存空间。mm_map 函数会根据程序段的虚拟地址（p_va）和段的内存大小（p_memsz）来分配内存。
+load_icode()函数：
+此函数是一个内核函数，作用为将 ELF 格式的二进制程序加载到当前进程的地址空间中，并为该进程设置合适的内存映射、堆栈以及寄存器。它是进程创建或用户程序执行的一个重要部分。具体步骤如下：
+
+
+```c
+if (current->mm != NULL) {
+    panic("load_icode: current->mm must be empty.\n");
+}
+```
+
+首先，函数确保当前进程（`current`）的内存管理结构（`mm`）为空。`mm` 是用来管理进程虚拟内存的结构体，如果它不为空，意味着进程已经有了内存映射，因此不能加载新的二进制程序。
+
+
+```c
+struct mm_struct *mm;
+if ((mm = mm_create()) == NULL) {
+    goto bad_mm;
+}
+```
+
+如果当前进程没有内存管理结构，函数创建一个新的内存管理结构 `mm`。若创建失败，函数将跳转到 `bad_mm` 错误处理部分。
+
+
+```c
+if (setup_pgdir(mm) != 0) {
+    goto bad_pgdir_cleanup_mm;
+}
+```
+
+创建并初始化新的页表，将进程的页目录指针（`pgdir`）指向内核为进程分配的页表结构。若页表设置失败，跳转到 `bad_pgdir_cleanup_mm`。
+
+
+```c
+struct elfhdr *elf = (struct elfhdr *)binary;
+struct proghdr *ph = (struct proghdr *)(binary + elf->e_phoff);
+if (elf->e_magic != ELF_MAGIC) {
+    ret = -E_INVAL_ELF;
+    goto bad_elf_cleanup_pgdir;
+}
+```
+
+此时，函数开始解析 ELF 格式的二进制文件。首先，它检查 ELF 文件的魔数（`e_magic`），以确认文件是否为有效的 ELF 格式。如果不是，返回 `-E_INVAL_ELF` 错误。
+
+`ph` 是指向程序头表的指针，`e_phoff` 指向程序头表的偏移地址。ELF 文件的程序头表包含了文件中各个加载段的信息。
+
+
+```c
+for (; ph < ph_end; ph ++) {
+    if (ph->p_type != ELF_PT_LOAD) {
+        continue;
+    }
+    if (ph->p_filesz > ph->p_memsz) {
+        ret = -E_INVAL_ELF;
+        goto bad_cleanup_mmap;
+    }
+    ...
+}
+```
+
+接下来，函数遍历 ELF 文件的每个程序头，检查其类型是否为 `ELF_PT_LOAD`（表示该段是可加载段）。对于每个加载段，检查文件大小 `p_filesz` 是否大于其分配内存大小 `p_memsz`，如果是，说明 ELF 文件有问题，返回错误。
+
+
+```c
+vm_flags = 0, perm = PTE_U | PTE_V;
+if (ph->p_flags & ELF_PF_X) vm_flags |= VM_EXEC;
+if (ph->p_flags & ELF_PF_W) vm_flags |= VM_WRITE;
+if (ph->p_flags & ELF_PF_R) vm_flags |= VM_READ;
+```
+
+接下来，根据段的标志位设置该段的内存映射权限。每个段的权限由其 `p_flags` 字段决定：
+
+- `ELF_PF_X`：可执行
+- `ELF_PF_W`：可写
+- `ELF_PF_R`：可读
+
+通过 `vm_flags` 设置相应的标志位，再通过 `perm` 设置对应的权限（如读、写、执行）。
+
+
+```c
+unsigned char *from = binary + ph->p_offset;
+size_t off, size;
+uintptr_t start = ph->p_va, end, la = ROUNDDOWN(start, PGSIZE);
+...
+while (start < end) {
+    if ((page = pgdir_alloc_page(mm->pgdir, la, perm)) == NULL) {
+        goto bad_cleanup_mmap;
+    }
+    ...
+    memcpy(page2kva(page) + off, from, size);
+    start += size, from += size;
+}
+```
+
+对于每个加载段，函数为该段在进程地址空间中分配内存并将 ELF 文件中的数据拷贝到分配的内存中。每个段的内存会根据页大小进行对齐（`ROUNDDOWN`）。如果内存分配失败，跳转到 `bad_cleanup_mmap`。
+
+
+```c
+end = ph->p_va + ph->p_memsz;
+if (start < la) {
+    ...
+    memset(page2kva(page) + off, 0, size);
+    start += size;
+}
+```
+
+BSS 段是未初始化的全局变量的内存区域，通常需要将其初始化为零。对于 BSS 段，函数会根据程序头的 `p_memsz` 字段，使用 `memset` 将未初始化的内存区域填充为零。
+
+
+```c
+vm_flags = VM_READ | VM_WRITE | VM_STACK;
+if ((ret = mm_map(mm, USTACKTOP - USTACKSIZE, USTACKSIZE, vm_flags, NULL)) != 0) {
+    goto bad_cleanup_mmap;
+}
+```
+
+在内存中为用户栈分配空间，栈的大小为 `USTACKSIZE`，并将其映射到虚拟地址 `USTACKTOP - USTACKSIZE`。
+
+
 ```c
 mm_count_inc(mm);
 current->mm = mm;
 current->cr3 = PADDR(mm->pgdir);
 lcr3(PADDR(mm->pgdir));
 ```
+
+设置当前进程的 `mm`（内存管理结构）和 `cr3` 寄存器（页表的物理地址）。`lcr3` 是一个内核函数，用于加载页目录基址寄存器。
+
+
+```c
+struct trapframe *tf = current->tf;
+uintptr_t sstatus = tf->status;
+memset(tf, 0, sizeof(struct trapframe));
+tf->gpr.sp = USTACKTOP;
+tf->epc = elf->e_entry;
+tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
+```
+
+设置进程的 `trapframe`。`trapframe` 结构体保存了进程的寄存器状态。主要需要设置：
+
+- `sp`（堆栈指针）：指向用户栈的顶部。
+- `epc`（程序计数器）：设置为 ELF 文件中的入口点 `e_entry`，表示程序开始执行的地方。
+- `status`：更新为适用于用户程序的状态，清除 `SSTATUS_SPP` 和 `SSTATUS_SPIE` 标志。
+
+
+```c
+ret = 0;
+out:
+return ret;
+```
+
+如果一切顺利，函数返回 0，表示成功加载了二进制程序。否则，函数会根据不同的错误情况跳转到相应的错误处理部分，并释放已分配的资源。
+
+**错误处理：**
+
+- `bad_mm`：内存管理结构创建失败。
+- `bad_pgdir_cleanup_mm`：页表设置失败，清理内存管理结构。
+- `bad_elf_cleanup_pgdir`：ELF 文件格式无效，清理页表。
+- `bad_cleanup_mmap`：内存映射设置失败，清理已分配的内存。
+
+**总结：**
+
+current->mm 表示当前进程的内存管理结构体（mm_struct），用于管理该进程的虚拟地址空间。如果已经有映射（即该进程已经有内存空间被分配），则无法加载新程序，因此报错并终止。
+创建一个新的内存管理结构体 mm，用于管理该进程的虚拟内存。若创建失败，则跳转至错误处理部分。
+设置新进程的页面目录（PDT），即为该进程建立一个虚拟地址空间映射。setup_pgdir 负责分配和初始化页表，并设置页目录。若失败，进行清理操作。
+通过 binary 获取 ELF 文件头（elfhdr），然后解析程序头表（proghdr）。检查 ELF 文件是否有效（即 e_magic 字段是否为有效的 ELF 魔术数）。
+遍历程序头表，处理每个加载类型为 ELF_PT_LOAD 的段（这些段是可加载到内存中的部分，如代码段和数据段）。如果程序头类型不是加载类型，跳过。
+为每个加载的程序段映射内存空间。mm_map 函数会根据程序段的虚拟地址（p_va）和段的内存大小（p_memsz）来分配内存。
+
+```c
+mm_count_inc(mm);
+current->mm = mm;
+current->cr3 = PADDR(mm->pgdir);
+lcr3(PADDR(mm->pgdir));
+```
+
 将当前进程的 mm 设置为新的内存管理结构，更新页目录地址，并刷新 TLB（转换后备页表）。
+
 
 **用户态进程从 RUNNING 状态到执行程序的第一条指令的过程**
 
-1. 进程创建与运行
+- 首先调用load_icode函数来加载应用程序：
 
-当一个新的用户进程被创建时，操作系统会调用 load_icode 函数来加载 ELF 格式的程序。首先，操作系统为进程分配内存，设置页面目录和堆栈，并将二进制程序加载到内存中。
+为用户进程创建新的mm结构，创建页目录表，创建虚拟内存空间，即往mm结构体添加vma结构，分配内存，并拷贝ELF文件的各个program section到新申请的内存上，为BSS section分配内存，并初始化为全0，分配用户栈内存空间，设置当前用户进程的mm结构、页目录表的地址及加载页目录表地址到cr3寄存器，系统通过 mm_map 映射内存区域，通过 pgdir_alloc_page 分配物理页面。在加载完程序后，系统会设置 trapframe，这是进程在执行期间保存寄存器值的地方。此时，系统通过修改 trapframe 设置程序计数器 epc 为 ELF 文件中的入口点，并设置栈指针 sp。
 
-2. 设置虚拟地址空间
+- load_icode返回到do_exevce，do_execve设置完当前用户进程的名字为“exit”后也返回了。这样一直原路返回到__alltraps函数时，接下来进入__trapret函数。__trapret函数先将栈上保存的tf的内容pop给相应的寄存器，然后跳转应用程序的入口（exit.c文件中的main函数），特权级也由内核态跳转到用户态（sret），接下来就开始执行用户程序。
 
-系统为程序分配内存，并设置虚拟地址空间，包括程序的代码段、数据段、堆和栈。系统通过 mm_map 映射内存区域，通过 pgdir_alloc_page 分配物理页面。
-
-3. 初始化上下文（Trapframe）
-
-在加载完程序后，系统会设置 trapframe，这是进程在执行期间保存寄存器值的地方。此时，系统通过修改 trapframe 设置程序计数器 epc 为 ELF 文件中的入口点，并设置栈指针 sp。
-
-4. 切换到用户模式
-
-系统设置完所有的内存和寄存器后，操作系统将进程的状态切换到 RUNNING，并将 CPU 从内核模式切换到用户模式。此时，用户程序从其入口点开始执行。
-
-5. 执行第一条指令
-
-通过修改 epc，进程的控制流跳转到程序的入口地址（即 ELF 文件中 e_entry 字段指定的地址）。此时，用户程序开始执行第一条指令。
 
 ![Alt text](4.png)
 ![Alt text](5.png)
@@ -112,6 +268,7 @@ lcr3(PADDR(mm->pgdir));
 ![Alt text](14.png)
 ![Alt text](15.png)
 ![Alt text](16.png)
+
 ## 练习2: 父进程复制自己的内存空间给子进程（需要编码）
 
 创建子进程的函数do_fork在执行中将拷贝当前进程（即父进程）的用户内存地址空间中的合法内容到新进程中（子进程），完成内存资源的复制。具体是通过copy_range函数（位于kern/mm/pmm.c中）实现的，请补充copy_range的实现，确保能够正确执行。
