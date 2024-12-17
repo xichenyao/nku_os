@@ -326,6 +326,99 @@ Copy-on-Write (COW) 是一种延迟复制技术，主要用于优化内存资源
 
 请分析fork/exec/wait/exit的执行流程。重点关注哪些操作是在用户态完成，哪些是在内核态完成？内核态与用户态程序是如何交错执行的？内核态执行结果是如何返回给用户程序的？
 请给出ucore中一个用户态进程的执行状态生命周期图（包执行状态，执行状态之间的变换关系，以及产生变换的事件或函数调用）。（字符方式画即可）
+
+用户程序一般在用户态执行，想让用户程序使用操作系统的服务的话，就涉及到一个CPU的特权级切换的过程，要使用ecall指令来切换，我们把系统调用封装成函数，这样用户程序就可以调用这些函数了，简化了用户进程的实现。  
+目前ucore的系统调用有这些下图这些。  
+`
+    static int (*syscalls[])(uint64_t arg[]) = {
+        [SYS_exit]              sys_exit,
+        [SYS_fork]              sys_fork,
+        [SYS_wait]              sys_wait,
+        [SYS_exec]              sys_exec,
+        [SYS_yield]             sys_yield,
+        [SYS_kill]              sys_kill,
+        [SYS_getpid]            sys_getpid,
+        [SYS_putc]              sys_putc,
+        [SYS_pgdir]             sys_pgdir,
+    };
+`
+在用户态进行系统调用的核心操作是，通过内联汇编进行ecall环境调用。这将产生一个trap, 进入S mode进行异常处理。
+无论是sys_exit、sys_fork、sys_wait还是sys_exec，本质上还是触发trap后调用了syscall函数，syscall将中断帧中的寄存器中的参数取出，再将参数传入syscalls中，根据参数来选择调用sys_exit还是其他函数。而这些函数的最后又是调用前面所实现的do_fork等函数。  
+`
+    void
+    syscall(void) {
+        struct trapframe *tf = current->tf;
+        uint64_t arg[5];
+        int num = tf->gpr.a0;
+        if (num >= 0 && num < NUM_SYSCALLS) {
+            if (syscalls[num] != NULL) {
+                arg[0] = tf->gpr.a1;
+                arg[1] = tf->gpr.a2;
+                arg[2] = tf->gpr.a3;
+                arg[3] = tf->gpr.a4;
+                arg[4] = tf->gpr.a5;
+                tf->gpr.a0 = syscalls[num](arg);
+                return ;
+            }
+        }
+        print_trapframe(tf);
+        panic("undefined syscall %d, pid = %d, name = %s.\n",
+                num, current->pid, current->name);
+    }
+`
+下面来看具体的执行流程  
+1.sys_fork:
+`
+    static int
+    sys_fork(uint64_t arg[]) {
+        struct trapframe *tf = current->tf;
+        uintptr_t stack = tf->gpr.sp;
+        return do_fork(0, stack, tf);
+    }
+`
+该函数将当前进程的中断帧以及中断帧中esp寄存器值作为参数传给do_fork，由do_fork完成具体的fork工作。  
+do_fork的作用是创建当前内核线程的一个副本，它们的执行上下文、代码、数据都一样，但是存储位置不同。实际需要”fork”的东西就是 stack 和 trapframe。在do_fork中给新内核线程分配资源，并且复制原进程的状态即可。  
+
+2.sys_exec:
+`
+    static int
+    sys_exec(uint64_t arg[]) {
+        const char *name = (const char *)arg[0];
+        size_t len = (size_t)arg[1];
+        unsigned char *binary = (unsigned char *)arg[2];
+        size_t size = (size_t)arg[3];
+        return do_execve(name, len, binary, size);
+    }
+`
+从参数中得到进程名，名字长度，程序首地址以及程序的大小信息，将他们作为参数传给do_execve从而完成让程序执行另一个程序的操作。
+
+3.sys_exit
+`
+    static int
+    sys_exit(uint64_t arg[]) {
+        int error_code = (int)arg[0];
+        return do_exit(error_code);
+    }
+`
+该函数中向do_exit传入了一个error_code，do_exit函数负责回收当前进程所占的大部分内存资源，并且通知父进程完成最后的回收工作。
+这个函数中首先对进程本身所占用的内存进行清理，并且设置进程的状态，若父进程处于等待状态，对父进程进行唤醒，让其处理接下来的内存清理。接着遍历该进程的所有子进程，改变他们的父进程为initproc，如果子进程也处于等待状态，则也进行唤醒。  
+由于进程退出时涉及到多个数据结构的修改，这里唤醒父进程之前先关闭中断，防止发生上下文切换。  
+
+4.sys_wait
+`
+    static int
+    sys_wait(uint64_t arg[]) {
+        int pid = (int)arg[0];
+        int *store = (int *)arg[1];
+        return do_wait(pid, store);
+    }
+`
+用于进程等待指定的子进程的退出并回收其资源，通过传入的参数获得pid和store，pid为需要等待退出的子进程id，store为子进程的退出状态。最后将这两个参数传给do_wait函数，完成具体的等待工作。  
+在do_wait的实现中，首先判断传入的store是否合法，接着对pid做出查询，若pid=0，则遍历子进程链表，等待任意一个子进程的退出。若pid!=0，则找到该子进程，若子进程状态不为PROC_ZOMBIE，表示该子进程还没有退出，则令当前进程状态为PROC_SLEEPING，等待子进程的唤醒。若子进程状态为PROC_ZOMBIE，表明此子进程处于退出状态，需要当前进程(即子进程的父进程)完成对子进程的最终回收工作，即首先把子进程控制块从两个进程队列proc_list和hash_list中删除，并释放子进程的内核堆栈和进程控制块。自此，子进程才彻底地结束了它的执行过程，它所占用的所有资源均已释放。  
+
+用户态进程的执行状态生命周期图如下。
+![Alt text](19.png)
+
 执行：make grade。如果所显示的应用程序检测都输出ok，则基本正确。（使用的是qemu-1.0.1）
 ![Alt text](17.png)
 ## 扩展练习 Challenge
