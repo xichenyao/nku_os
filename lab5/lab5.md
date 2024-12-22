@@ -465,99 +465,137 @@ do_fork的作用是创建当前内核线程的一个副本，它们的执行上�
 用户地址空间中的页面不会被直接复制，而是通过将页表项标记为只读，允许父子进程共享相同的物理内存页面。
 页面的实际复制发生在首次写入操作时，触发缺页异常，由内核完成页面的分配和数据复制。
 
+1.do_fork()
+用于创建一个新进程（子进程）。它包括了进程创建的内存管理和共享逻辑，其中对 COW（写时复制）机制 的使用进行了特定条件下的区分。
 ```c
-int do_pgfault(struct mm_struct *mm, uint_t error_code, uintptr_t addr) {
-    int ret = -E_INVAL;
-    struct vma_struct *vma = find_vma(mm, addr);
-    pgfault_num++;
-
-    if (vma == NULL || vma->vm_start > addr) {
-        cprintf("not valid addr %x, and cannot find it in vma\n", addr);
-        goto failed;
-    }
-
-    uint32_t perm = PTE_U;
-    if (vma->vm_flags & VM_WRITE) {
-        perm |= PTE_W; // 标记页面可写
-    }
-    addr = ROUNDDOWN(addr, PGSIZE);
-
-    ret = -E_NO_MEM;
-    pte_t *ptep = NULL;
-
-    if ((ptep = get_pte(mm->pgdir, addr, 1)) == NULL) {
-        cprintf("get_pte in do_pgfault failed\n");
-        goto failed;
-    }
-
-    if (*ptep == 0) {
-        // 页表项不存在，分配页面并映射
-        if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
-            cprintf("pgdir_alloc_page in do_pgfault failed\n");
-            goto failed;
-        }
-    } else if (!(*ptep & PTE_W)) {
-        // 页表项存在但不可写，检查是否需要 COW
-        struct Page *page = pte2page(*ptep);
-
-        // 如果页面是共享的（引用计数 > 1），执行 COW
-        if (page_ref_count(page) > 1) {
-            struct Page *new_page = alloc_page();
-            if (new_page == NULL) {
-                cprintf("alloc_page in do_pgfault failed\n");
-                goto failed;
-            }
-
-            // 复制原页面内容到新页面
-            void *src_kvaddr = page2kva(page);
-            void *dst_kvaddr = page2kva(new_page);
-            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
-
-            // 更新页表，映射新页面
-            if (page_insert(mm->pgdir, new_page, addr, perm) != 0) {
-                cprintf("page_insert in do_pgfault failed\n");
-                goto failed;
-            }
-
-            // 减少原页面的引用计数
-            page_ref_dec(page);
-        } else {
-            // 页面是独占的，直接设置写权限
-            *ptep |= PTE_W;
-        }
-    } else if (swap_init_ok) {
-        // 页面交换逻辑
-        struct Page *page = NULL;
-        if (swap_in(mm, addr, &page) != 0) {
-            cprintf("swap_in in do_pgfault failed\n");
-            goto failed;
-        }
-        if (page_insert(mm->pgdir, page, addr, perm) != 0) {
-            cprintf("page_insert in do_pgfault failed\n");
-            goto failed;
-        }
-        swap_map_swappable(mm, addr, page, 1);
-        page->pra_vaddr = addr;
-    } else {
-        cprintf("no swap_init_ok but ptep is %x, failed\n", *ptep);
-        goto failed;
-    }
-
-    ret = 0;
-failed:
-    return ret;
+bool cow = (current != idleproc && current->mm != NULL);
+if (cow) {
+    proc->share_mem = 1;  // 新增：标记此进程共享内存
+    clone_flags |= CLONE_VM;  // 新增：确保共享虚拟内存
 }
 
+
 ```
-判断共享页面
+如果当前进程是 idleproc，则不需要 COW，因为 idleproc 是特殊内核进程，其内存管理和普通进程不同。
 
-使用 page_ref_count(page) 检查页面的引用计数，判断是否是共享页面。
-如果共享页面被写入，执行 COW 操作。
-COW 操作
+2.copy_mm()
+它负责为新创建的进程设置其内存管理单元（mm_struct）。该函数会根据传入的标志 clone_flags 和参数 cow（写时复制）决定是否共享内存或为新进程分配独立的内存结构。
+修改判断条件
+```c
+    if (!cow) {
+        mm = oldmm;
+        goto good_mm;
+    }
+```
+最初的这个条件是根据 CLONE_VM 标志来判断是否共享父进程的虚拟内存地址空间。如果设置了 CLONE_VM，那么子进程将与父进程共享相同的虚拟内存，这对于某些情况是有意义的，但它并没有完全考虑到 写时复制（COW） 的需求。
+通过 if (!cow) 来判断是否需要启用 COW 机制。如果 cow 为 false，则表示父子进程共享内存，直接使用父进程的 mm_struct，即不需要进行写时复制机制的处理。
 
-分配新页面 alloc_page。
-复制原页面内容到新页面 memcpy。
-更新页表映射到新页面，并设置写权限。
-状态变化
+3.dup_mmap()
+主要目的是在进程 fork 或其他操作时，复制父进程的内存映射（mmap）。它的核心目标是将父进程的内存映射关系（vma，虚拟内存区域）复制到子进程，并且建立相应的虚拟内存区间结构。
+```c
+bool share = 1;
+```
+将 share 变量设置为 1 是为了实现父子进程共享内存页面。
+当 share = 0 时，copy_range 函数会将父进程的页面内容实际复制到子进程中。
+这样，父子进程在逻辑上拥有完全独立的页面，即使它们的虚拟内存映射结构相同，但每个虚拟地址都对应不同的物理内存页面。
+这种方法效率较低，因为需要立即分配和复制页面，尤其当内存页面数量较多时，性能开销显著。
+当 share = 1 时，copy_range 函数不会实际复制物理页面，而是使父子进程共享相同的物理页面。
+在这种情况下：
+父子进程的虚拟地址空间仍然保持独立。
+对应的物理页面引用计数增加，表示页面被多个进程共享。
+页面被标记为只读（read-only）。如果父子进程中的任何一个试图写入该页面，会触发页面故障（page fault），并在此时执行实际的页面复制操作。
 
+
+4.copy_range()
+这段代码实现了在分页内存管理系统中，将某个内存范围的页面从一个页表（父进程）复制到另一个页表（子进程）。同时，代码支持两种模式：共享页面模式（通过写时复制机制） 和 直接复制页面模式，由 share 参数决定。
+```c
+             if (share) {
+                 
+                 uint32_t perm = ((*ptep & PTE_USER) & ~PTE_W) | PTE_V; 
+ 
+                 ret = page_insert(from, page, start, perm) & page_insert(to, page, start, perm);
+             } else {
+                 
+                 uint32_t perm = (*ptep & PTE_USER);
+                 struct Page *npage = alloc_page();
+                 assert(npage != NULL);
+             // (1) 获取源页面的内核虚拟地址
+             //
+                 void *src_kvaddr = page2kva(page);
+                 // (2) 获取目标页面的内核虚拟地址
+                 void *dst_kvaddr = page2kva(npage);
+                 // (3) 将源页面的内容复制到目标页面
+                 memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+                 // (4) 将新页面映射到进程 B 的地址空间
+                 ret = page_insert(to, npage, start, perm);
+                 assert(ret == 0);
+        }
+
+```
+share=1；
+提取父进程页表项的用户权限（PTE_USER），去掉写权限（~PTE_W），确保页面变为只读。
+调用 page_insert 将页面映射信息分别插入到父进程和子进程的页表中。
+这样，父子进程共享相同的物理页面，但页面设置为只读。只有在写入时才触发写时复制（COW）。
+share=0；
+提取父进程页表项的用户权限（PTE_USER），保留读写权限。
+调用 alloc_page 分配一个新的物理页面。
+将父进程页面的内容从内核虚拟地址 kva_src 复制到新页面的地址 kva_dst。
+使用 page_insert 将新页面映射到子进程的页表。
+
+5.do_pgfault()
+
+```c
+
+    // 检查页面是否存在
+    if (*ptep & PTE_V) {
+        // 写保护处理：写时复制（COW）
+        if ((error_code & 2) && !(*ptep & PTE_W)) { // 对只读页面尝试写入
+            struct Page *page = pte2page(*ptep);
+
+            if (page_ref(page) == 1) {
+                // 如果页面引用数为 1，则直接添加写权限
+                *ptep |= PTE_W;
+                ret = 0;
+                goto failed;
+            }
+
+            // 页面被多个进程共享，需要进行复制
+            struct Page *npage = pgdir_alloc_page(mm->pgdir, addr, perm);
+            if (npage == NULL) {
+                cprintf("pgdir_alloc_page failed during COW\n");
+                ret = -E_NO_MEM;
+                goto failed;
+            }
+
+            // 将原页面内容复制到新页面
+             // (1) 获取源页面的内核虚拟地址
+             //
+                 void *src_kvaddr = page2kva(page);
+                 // (2) 获取目标页面的内核虚拟地址
+                 void *dst_kvaddr = page2kva(npage);
+                 // (3) 将源页面的内容复制到目标页面
+                 memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+
+            // 更新页表，将新页面插入并赋予写权限
+            ret = page_insert(mm->pgdir, npage, addr, perm | PTE_W);
+            if (ret != 0) {
+                cprintf("page_insert failed during COW\n");
+                goto failed;
+            }
+
+            ret = 0;
+            goto failed;
+        }
+    } else {
+        // 页面不存在的处理
+        }
+```
+检查页面是否有效（PTE_V）。
+如果页面有效但不可写（!(*ptep & PTE_W)），且尝试写入（error_code & 2），则触发写时复制。
+page_ref(page)：检查页面的引用计数。
+如果引用计数为 1，说明页面未被共享，可以直接修改权限为可写（PTE_W），无需复制。
+如果页面引用计数大于 1（被多个进程共享），则：
+分配一个新的页面。
+将原页面的内容复制到新页面。
+将新页面插入到页表，并赋予写权限。
 共享状态 → 独占状态：减少原页面的引用计数，为当前进程分配新页面。
