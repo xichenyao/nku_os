@@ -411,7 +411,8 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
                 assert(ret == 0);
 			}
         start += PGSIZE;
-   } while (start != 0 && start < end);
+		}
+		} while (start != 0 && start < end);
     return 0;
 }
 
