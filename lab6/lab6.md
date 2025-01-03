@@ -402,7 +402,13 @@ rq->lab6_run_pool = skew_heap_insert(rq->lab6_run_pool,&proc->lab6_run_pool,proc
 - 因为步进值每次增加的量是固定的，而步进值越小，调度的频率就越高，所以经过足够多的时间片，优先级较高的进程相对于低优先级进程会获得更多的 CPU 时间。
 
 
-
+![Alt text](1.png)
+![Alt text](2.png)
+![Alt text](3.png)
+![Alt text](4.png)
+![Alt text](5.png)
+![Alt text](6.png)
+![Alt text](7.png)
 
 
 
